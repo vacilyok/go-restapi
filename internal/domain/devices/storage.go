@@ -2,23 +2,22 @@ package devices
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	devicesstorage "mediator/internal/adapters/db/devicestorage"
 	"mediator/internal/config"
+	"mediator/pkg/database/pg"
+
+	"github.com/jackc/pgx/v4"
 )
 
 type dbs struct {
-	conn         *sql.DB
-	isConnection bool
+	conn *pgx.Conn
 }
 
-func NewDevStorage(dbConn *sql.DB, isConnection bool) devicesstorage.DevStorage {
+func NewDevStorage(dbConn *pgx.Conn) devicesstorage.DevStorage {
 	return &dbs{
-		conn:         dbConn,
-		isConnection: isConnection,
+		conn: dbConn,
 	}
 }
 
@@ -42,11 +41,15 @@ func deviceTypeByName() map[string]int {
 
 // Get device from db by device name
 func (d *dbs) GetDevByName(devName string) *devicesstorage.DtoDevice {
-	var devTypeid int
+	var (
+		devTypeid int
+	)
+	ctx := context.Background()
 	dbDev := new(devicesstorage.DtoDevice)
 	devMapID := deviceTypeById()
-	query := fmt.Sprintf(`SELECT id, name, enabled, device_typeid FROM device d WHERE name='%s' `, devName)
-	result, _ := d.conn.Query(query)
+	query := "SELECT id, name, enabled, device_typeid FROM device d WHERE name=$1"
+	result, _ := d.conn.Query(ctx, query, devName)
+
 	if result.Next() {
 		result.Scan(&dbDev.Id, &dbDev.Name, &dbDev.Enabled, &devTypeid)
 	}
@@ -65,24 +68,27 @@ func (d *dbs) GetAllDev() []*devicesstorage.PostDevice {
 		dst                 *string
 	)
 	dst = nil
-
 	dbDev := new(devicesstorage.PostDevice)
 	devMapID := deviceTypeById()
-	query := `SELECT d.name, r.enabled,d.device_typeid,"" as vlan_id,r.forwarding,"" as slave, dst   FROM device d
-	inner join RawDevice r on r.device_id =d.id 
-	UNION 
-	SELECT d.name, v.enabled,d.device_typeid,v.vlan_id, v.forwarding,  
-	(select distinct name from device where id =v.slave),
-	(select distinct name from device where id =v.dst)
-	FROM device d inner join VlanDevice v on v.vlan_device_id =d.id 
+	query := "SELECT d.name, r.enabled,d.device_typeid,0 as vlan_id,r.forwarding,'' as slave, '' as dst " +
+		" FROM device d  inner join RawDevice r on r.device_id =d.id " +
+		" UNION " +
+		" SELECT d.name, v.enabled,d.device_typeid,v.vlan_id, v.forwarding,  " +
+		" (select distinct name from device where id =v.slave)," +
+		" COALESCE((select distinct name from device where id =v.dst),'')" +
+		" FROM device d inner join VlanDevice v on v.vlan_device_id =d.id "
 
-	 `
-	result, err := d.conn.Query(query)
+	ctx := context.Background()
+	rows, err := d.conn.Query(ctx, query)
 	if err != nil {
-		log.Println(err)
+		config.Logging.Error(err.Error())
 	}
-	for result.Next() {
-		result.Scan(&name, &enabled, &devTypeid, &vlan_id, &forwarding, &slave, &dst)
+
+	for rows.Next() {
+		err = rows.Scan(&name, &enabled, &devTypeid, &vlan_id, &forwarding, &slave, &dst)
+		if err != nil {
+			config.Logging.Error(err.Error())
+		}
 		dbDev.Name = name
 		dbDev.Enabled = enabled
 		dbDev.Type = devMapID[devTypeid]
@@ -93,7 +99,7 @@ func (d *dbs) GetAllDev() []*devicesstorage.PostDevice {
 		dbDevices = append(dbDevices, dbDev)
 		dbDev = new(devicesstorage.PostDevice)
 	}
-	result.Close()
+	rows.Close()
 	return dbDevices
 
 }
@@ -101,8 +107,9 @@ func (d *dbs) GetAllDev() []*devicesstorage.PostDevice {
 // Check exists device in database
 func (d *dbs) getDevIdByName(devName string) (int, int) {
 	var dev_id, device_typeid int
-	query := fmt.Sprintf(`SELECT id, device_typeid FROM device WHERE name='%s' `, devName)
-	result, _ := d.conn.Query(query)
+	query := "SELECT id, device_typeid FROM device WHERE name=$1"
+	ctx := context.Background()
+	result, _ := d.conn.Query(ctx, query, devName)
 	if result.Next() {
 		result.Scan(&dev_id, &device_typeid)
 	}
@@ -113,20 +120,24 @@ func (d *dbs) getDevIdByName(devName string) (int, int) {
 // Check exists device in database
 func (d *dbs) CheckExistDevice(devName string) bool {
 
-	if !d.isConnection {
-		log.Println("ERROR: Fail check exist device. No connection to database")
+	var err error
+	if !pg.IsConnected(d.conn) {
+		d.conn, err = pg.ConnectDB()
+	}
+	if err != nil {
+		config.Logging.Error("Fail check exist device. No connection to database")
 		return false
 	}
 
 	countRows := 0
 	query := "SELECT count(*) cnt FROM device"
 	if devName != "" {
-		query = fmt.Sprintf(`SELECT count(*) cnt FROM device WHERE name='%s' `, devName)
+		query = fmt.Sprintf("SELECT count(*) cnt FROM device WHERE name='%s' ", devName)
 	}
-	result, err := d.conn.Query(query)
+	ctx := context.Background()
+	result, err := d.conn.Query(ctx, query)
 	if err != nil {
 		return false
-
 	}
 	if result.Next() {
 		result.Scan(&countRows)
@@ -144,8 +155,12 @@ func (d *dbs) UpdateDbDev(dev map[string]interface{}) error {
 	var (
 		dev_id, dev_type int
 		query            string
+		err              error
 	)
-	if !d.isConnection {
+	if !pg.IsConnected(d.conn) {
+		d.conn, err = pg.ConnectDB()
+	}
+	if err != nil {
 		return errors.New("fail update device, no connection to database")
 	}
 
@@ -160,9 +175,9 @@ func (d *dbs) UpdateDbDev(dev map[string]interface{}) error {
 		if _, ok := dev["mtu"]; ok {
 			query += fmt.Sprintf("UPDATE RawDevice set mtu=%d WHERE device_id=%d;", dev["mtu"].(int), dev_id)
 		}
-		_, err := d.conn.Exec(query)
+		_, err := d.conn.Exec(context.Background(), query)
 		if err != nil {
-			config.Mysqllog.Error(err.Error())
+			config.Logging.Error(err.Error())
 			return err
 		}
 
@@ -182,9 +197,9 @@ func (d *dbs) UpdateDbDev(dev map[string]interface{}) error {
 				query += fmt.Sprintf("UPDATE VlanDevice set dst=NULL WHERE vlan_device_id=%d;", dev_id)
 			}
 		}
-		_, err := d.conn.Exec(query)
+		_, err := d.conn.Exec(context.Background(), query)
 		if err != nil {
-			config.Mysqllog.Error(err.Error())
+			config.Logging.Error(err.Error())
 			return err
 		}
 	}
@@ -193,49 +208,58 @@ func (d *dbs) UpdateDbDev(dev map[string]interface{}) error {
 
 func (d *dbs) InsertVlan(device *devicesstorage.PostDevice) error {
 	var (
-		err   error
-		query string
+		err       error
+		query     string
+		lastDevId int
 	)
+	if !pg.IsConnected(d.conn) {
+		d.conn, err = pg.ConnectDB()
+	}
 
-	if !d.isConnection {
+	if err != nil {
 		err := errors.New("Fail create new device " + device.Name + " . No connection to database")
-		config.Mysqllog.Error(err.Error())
+		config.Logging.Error(err.Error())
 		return err
 	}
 	devType := deviceTypeByName()
-	query = fmt.Sprintf(`INSERT INTO device (name, device_typeid) VALUES ("%s", %d)`, device.Name, devType[device.Type])
-	res, err := d.conn.Exec(query)
+	query = "INSERT INTO device (name, device_typeid) VALUES ($1, $2) RETURNING id"
+	err = d.conn.QueryRow(context.Background(), query, device.Name, devType[device.Type]).Scan(&lastDevId)
 	if err != nil {
-		config.Mysqllog.Error("Fail create vlan " + device.Name)
+		config.Logging.Error("Fail create vlan " + device.Name)
 		return err
 	}
-	lastDevId, _ := res.LastInsertId()
 	slave_id, _ := d.getDevIdByName(device.Slave)
 
 	if device.Dst != nil {
 		dst_id, _ := d.getDevIdByName(*device.Dst)
-		query = fmt.Sprintf(`INSERT INTO VlanDevice (vlan_device_id, slave, vlan_id,enabled,forwarding, dst) VALUES (%d, %d,%d,%t,%t,%d)`, lastDevId, slave_id, device.Vlan_id, device.Enabled, device.Forwarding, dst_id)
+		query = "INSERT INTO VlanDevice (vlan_device_id, slave, vlan_id,enabled,forwarding, dst) VALUES ($1, $2,$3,$4,$5,$6)"
+		_, err = d.conn.Exec(context.Background(), query, lastDevId, slave_id, device.Vlan_id, device.Enabled, device.Forwarding, dst_id)
 	} else {
-		query = fmt.Sprintf(`INSERT INTO VlanDevice (vlan_device_id, slave, vlan_id,enabled,forwarding) VALUES (%d, %d,%d,%t,%t)`, lastDevId, slave_id, device.Vlan_id, device.Enabled, device.Forwarding)
+		query = "INSERT INTO VlanDevice (vlan_device_id, slave, vlan_id,enabled,forwarding) VALUES ($1, $2,$3,$4,$5)"
+		_, err = d.conn.Exec(context.Background(), query, lastDevId, slave_id, device.Vlan_id, device.Enabled, device.Forwarding)
 	}
 
-	_, err = d.conn.Exec(query)
 	if err != nil {
-		config.Mysqllog.Error("Fail create vlan " + device.Name)
+		config.Logging.Error("Fail create vlan " + device.Name)
 		return err
 	}
-
 	return nil
 }
 
 // create new device in database
-func (d *dbs) CreateDev(newDev *devicesstorage.DtoCreateDevice) (*sql.Tx, error) {
+func (d *dbs) CreateDev(newDev *devicesstorage.DtoCreateDevice) (pgx.Tx, error) {
 	var (
-		err   error
-		tx    *sql.Tx
-		query string
+		err       error
+		tx        pgx.Tx
+		query     string
+		lastDevId int
 	)
-	if !d.isConnection {
+
+	if !pg.IsConnected(d.conn) {
+		d.conn, err = pg.ConnectDB()
+	}
+
+	if err != nil {
 		err := errors.New(" Fail create new device. No connection to database")
 		return nil, err
 	}
@@ -244,49 +268,49 @@ func (d *dbs) CreateDev(newDev *devicesstorage.DtoCreateDevice) (*sql.Tx, error)
 	ctx := context.Background()
 
 	numTypeNewDev := devType[newDev.Type]
-	query = fmt.Sprintf(`INSERT INTO device (name, device_typeid) VALUES ("%s", %d)`, newDev.Name, devType[newDev.Type])
-	tx, err = d.conn.BeginTx(ctx, nil)
+	query = "INSERT INTO device (name, device_typeid) VALUES ($1, $2) RETURNING id"
+	tx, err = d.conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		config.Mysqllog.Error("Create device BeginTx error")
+		config.Logging.Error("Create device BeginTx error")
 		return nil, err
 	}
-	res, err := tx.ExecContext(ctx, query)
+	err = tx.QueryRow(ctx, query, newDev.Name, devType[newDev.Type]).Scan(&lastDevId)
 	if err != nil {
-		config.Mysqllog.Error("Error insert device with name " + newDev.Name)
+		config.Logging.Error("Error insert device with name " + newDev.Name)
 		return nil, err
 	}
-	lastDevId, _ := res.LastInsertId()
-
-	// if device type raw
-	// , newDev.Enabled, newDev.Routing, newDev.Forwarding, newDev.Dst
 	if numTypeNewDev == 1 {
-		query = fmt.Sprintf(`INSERT INTO RawDevice (device_id, running, enabled, routing, forwarding, flow_control, mtu)  VALUES (%d,%t,%t,%t,%t,%t,%d) `, lastDevId, newDev.Running, newDev.Enabled, newDev.Routing, newDev.Forwarding, newDev.Flow_control, newDev.Mtu)
-		_, err = tx.ExecContext(ctx, query)
+		query = "INSERT INTO RawDevice (device_id, running, enabled, routing, forwarding, flow_control, mtu)  VALUES ($1,$2,$3,$4,$5,$6,$7)"
+		_, err = tx.Exec(ctx, query, lastDevId, newDev.Running, newDev.Enabled, newDev.Routing, newDev.Forwarding, newDev.Flow_control, newDev.Mtu)
 		if err != nil {
-			tx.Rollback()
-			config.Mysqllog.Error("fail insert new raw device " + newDev.Name)
+			tx.Rollback(ctx)
+			config.Logging.Error("fail insert new raw device " + newDev.Name)
 			return nil, err
 		}
-
 	}
 	return tx, err
 }
 
 // delete device by name from db
 func (d *dbs) DeleteDevByName(devName string) error {
-	if !d.isConnection {
+	var err error
+	if !pg.IsConnected(d.conn) {
+		d.conn, err = pg.ConnectDB()
+	}
+
+	if err != nil {
 		return errors.New(" Query delete device from db is fail. Not connect to db")
 	}
 	ctx := context.Background()
-	tx, err := d.conn.BeginTx(ctx, nil)
+	tx, err := d.conn.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, "Delete from  device WHERE name = ?", devName)
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, "Delete from  device WHERE name = $1", devName)
 	if err != nil {
 		return err
 	}
-	tx.Commit()
+	tx.Commit(ctx)
 	return nil
 }

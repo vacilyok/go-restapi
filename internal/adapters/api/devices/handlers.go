@@ -1,6 +1,7 @@
 package devicehandlers
 
 import (
+	"errors"
 	"io/ioutil"
 	"mediator/internal/adapters/api"
 	"mediator/internal/domain/devices"
@@ -8,7 +9,7 @@ import (
 	"mediator/internal/config"
 	"net/http"
 
-	mux "gitlab.ddos-guard.net/dma/gorilla"
+	mux "github.com/gorilla"
 )
 
 const (
@@ -43,7 +44,7 @@ func (dh *deviceHandler) Register(router *mux.Router) {
 
 // http error message response
 func (dh *deviceHandler) errorResponse(w http.ResponseWriter, err error, code int) {
-	config.Mysqllog.Error(err.Error())
+	config.Logging.Error(err.Error())
 	w.WriteHeader(code)
 	w.Write([]byte(err.Error()))
 }
@@ -57,8 +58,18 @@ func (dh *deviceHandler) viewResponse(writer http.ResponseWriter, resp *http.Res
 		dh.errorResponse(writer, err, 500)
 		return
 	}
+	if resp.StatusCode > 205 {
+		err = errors.New(string(respBody))
+		dh.errorResponse(writer, err, resp.StatusCode)
+		return
+
+	}
 	writer.WriteHeader(resp.StatusCode)
 	writer.Write(respBody)
+	if len(respBody) > 0 && len(respBody) < 300 {
+		config.Logging.Info(string(respBody))
+	}
+
 }
 
 // send request rpc server for get all devices state

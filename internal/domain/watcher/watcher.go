@@ -28,40 +28,40 @@ func NewWatcher(dservice devices.DevService, rservice rules.RuleService) WatchSe
 // *******************************************************************************
 func (w *watcher) StartWatch() {
 	var startMediatorTime float64 = 0
-
+	ticker := time.NewTicker(time.Second)
 	go func() {
-		for range time.Tick(time.Second) {
+		for range ticker.C {
 			uptimeSystem, err := w.getUptime()
 			if err != nil {
-				config.Mysqllog.Error(err.Error())
+				config.Logging.Error(err.Error())
 				continue
 			}
 			if startMediatorTime == 0 {
 				startMediatorTime = 1
-				config.Mysqllog.Info("Launched initialization process at startup")
+				config.Logging.Info("Launched initialization process at startup")
 				err = w.devservice.InitDevices()
 				if err != nil {
-					config.Mysqllog.Error(err.Error())
+					config.Logging.Error(err.Error())
 					return
 				}
 				err = w.rulservice.InitRules()
 				if err != nil {
-					config.Mysqllog.Error(err.Error())
+					config.Logging.Error(err.Error())
 					return
 				}
 				continue
 			}
 			isRestart := w.isRestart(&startMediatorTime, uptimeSystem)
 			if isRestart {
-				config.Mysqllog.Info("Service restart detected. Сonfiguration process started ...")
+				config.Logging.Info("Service restart detected. Сonfiguration process started ...")
 				err = w.devservice.InitDevices()
 				if err != nil {
-					config.Mysqllog.Error(err.Error())
+					config.Logging.Error(err.Error())
 					return
 				}
 				w.rulservice.InitRules()
 				if err != nil {
-					config.Mysqllog.Error(err.Error())
+					config.Logging.Error(err.Error())
 					return
 				}
 

@@ -1,10 +1,10 @@
 {
     "DBLogin": "",
     "DBPass": "",
-    "DBHost": "10.100.6.135",
+    "DBHost": "1.1.1.135",
     "DBPort": 13306,
-    "DBName": "TIE_DB",
-    "MediatorName": "mediator-1",
+    "DBName": "DB",
+    "MediatorName": "md-1",
     "RPCHost": "127.0.0.1",
     "RPCPort": 8080
 }

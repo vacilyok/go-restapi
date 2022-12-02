@@ -7,7 +7,7 @@ import (
 	"mediator/internal/config"
 	"net/http"
 
-	mux "gitlab.ddos-guard.net/dma/gorilla"
+	mux "github.com/gorilla"
 )
 
 type metricHandler struct {

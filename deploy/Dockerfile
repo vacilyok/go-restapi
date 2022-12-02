@@ -20,7 +20,6 @@ RUN go mod download
 
 COPY . ./
 RUN go build -o /app/mediator .
-COPY ./migrations/ /app/migrations/
 
 ##
 ## Deploy
@@ -30,5 +29,7 @@ FROM alpine:latest
 WORKDIR /app
 
 COPY --from=build_base /app .
+COPY --from=build_base /build/migrations ./
+COPY --from=build_base /build/scripts ./
 EXPOSE 4000
 CMD ["/app/mediator"]

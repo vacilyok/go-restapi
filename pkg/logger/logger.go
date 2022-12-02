@@ -1,17 +1,15 @@
 package logger
 
 import (
-	"context"
-	"database/sql"
-	"log"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
+var l *zap.Logger
+
 type Logger interface {
-	// LogRest(string, string, string)
 	Error(string)
 	Warning(string)
 	Info(string)
@@ -19,83 +17,39 @@ type Logger interface {
 }
 
 type LogService struct {
-	connection   *sql.DB
-	isConnection bool
+	*zap.Logger
 }
 
-func NewLogger(connection *sql.DB, isConnection bool) Logger {
-	return &LogService{
-		connection:   connection,
-		isConnection: isConnection,
-	}
+func NewLogger() Logger {
+	var cfg zap.Config = zap.NewProductionConfig()
+	cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout(time.RFC3339)
+	cfg.EncoderConfig.CallerKey = ""
+	cfg.EncoderConfig.StacktraceKey = ""
+	cfg.OutputPaths = []string{"stdout"}
+	cfg.ErrorOutputPaths = []string{"stdout"}
+	l, _ = cfg.Build()
+	return &LogService{}
 }
 
 //Logs errors message
-func (l *LogService) Error(msg string) {
-	log.Println("ERROR:", msg)
-	if l.isConnection {
-		l.insert(msg, 1)
-	}
+func (log *LogService) Error(msg string) {
+	l.Error(msg)
 }
 
-func (l *LogService) Warning(msg string) {
-	log.Println("WARNING: ", msg)
-	if l.isConnection {
-		l.insert(msg, 2)
-	}
+func (log *LogService) Warning(msg string) {
+	l.Warn(msg)
 }
 
-func (l *LogService) Info(msg string) {
-	log.Println("INFO: ", msg)
-	if l.isConnection {
-		l.insert(msg, 3)
-	}
-}
-
-func (l *LogService) insert(msg string, lvlmsg int) {
-	cur_time := time.Now().Format("2006-01-02 15:04:05")
-	ctx := context.Background()
-	err := l.connection.PingContext(ctx)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	tx, err := l.connection.BeginTx(ctx, nil)
-	if err != nil {
-		log.Println("Logger: ", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, "INSERT INTO logger (date, source, message, level) VALUES (?,?,?,?)", cur_time, "", msg, lvlmsg)
-	if err != nil {
-		log.Println("Logger: Insert into logger ", err)
-	}
-	tx.Commit()
+func (log *LogService) Info(msg string) {
+	l.Info(msg)
 }
 
 // ******************************************************************************************************************************************
 //Logs REST API event
-func (l *LogService) LogRest(msg string, route string, method string) {
-	if !l.isConnection {
-		return
-	}
-	cur_time := time.Now().Format("2006-01-02 15:04:05")
-	ctx := context.Background()
-	err := l.connection.PingContext(ctx)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	if len(msg) == 0 {
-		msg = "{}"
-	}
-	tx, err := l.connection.BeginTx(ctx, nil)
-	if err != nil {
-		log.Println("Logger: ", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, "INSERT INTO rest_logger (date, source, route, method,message) VALUES (?,?,?,?,?)", cur_time, "", route, method, msg)
-	if err != nil {
-		log.Println("Logger: Insert into rest_logger", err)
-	}
-	tx.Commit()
+func (log *LogService) LogRest(msg, route, method string) {
+	l.Info("",
+		zap.String("route", route),
+		zap.String("method", method),
+		zap.String("body", msg),
+	)
 }

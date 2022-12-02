@@ -2,18 +2,18 @@ package devices
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 
 	devicesstorage "mediator/internal/adapters/db/devicestorage"
 	"mediator/internal/config"
 	"net/http"
 	"strconv"
 
-	mux "gitlab.ddos-guard.net/dma/gorilla"
+	mux "github.com/gorilla"
 )
 
 const devicesURL = "/devices"
@@ -54,7 +54,7 @@ func (s *service) CreateNewDev(w http.ResponseWriter, r *http.Request) (*http.Re
 	if err != nil {
 		return nil, errors.New("fail read json body at create new device")
 	}
-	config.Mysqllog.LogRest(string(respBody), "/devices", "POST")
+	config.Logging.LogRest(string(respBody), "/devices", "POST")
 	postDevs := make(map[string][]devicesstorage.PostDevice)
 	err = json.Unmarshal(respBody, &postDevs)
 	if err != nil {
@@ -68,12 +68,12 @@ func (s *service) CreateNewDev(w http.ResponseWriter, r *http.Request) (*http.Re
 			}
 			if dev_exists := s.storage.CheckExistDevice(dev.Name); dev_exists {
 				err_message := "Device with name " + dev.Name + " alredy exists in db"
-				config.Mysqllog.Warning(err_message)
+				config.Logging.Warning(err_message)
 				return nil, errors.New(err_message)
 			}
 			if slave_exists := s.storage.CheckExistDevice(dev.Slave); !slave_exists {
 				err_message := "Slave device with name " + dev.Slave + " not found in db"
-				config.Mysqllog.Error(err_message)
+				config.Logging.Error(err_message)
 				return nil, errors.New(err_message)
 			}
 
@@ -104,60 +104,23 @@ func (s *service) CreateNewDev(w http.ResponseWriter, r *http.Request) (*http.Re
 // Send POST request to RPC
 func (s *service) postRequestToRPC(obj map[string][]map[string]interface{}) (*http.Response, error) {
 	jsonString, _ := json.Marshal(obj)
-	// config.Mysqllog.LogRest(string(jsonString), "/devices", "POST")
+	// config.Logging.LogRest(string(jsonString), "/devices", "POST")
 
 	url := "http://" + config.Params.RPCHost + ":" + strconv.Itoa(config.Params.RPCPort) + "/devices"
 	request, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonString))
 	if err != nil {
-		config.Mysqllog.Error("POST  request to rpc server is fail")
+		config.Logging.Error("POST  request to rpc server is fail")
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	client := &http.Client{}
 	response, err := client.Do(request)
 	if err != nil {
-		config.Mysqllog.Error("Fail response for POST new device " + err.Error())
+		config.Logging.Error("Fail response for POST new device " + err.Error())
 		return nil, err
 	}
 	return response, nil
 }
-
-// validate json body at create new device
-// func (s *service) validateNewDev(jBody io.ReadCloser) ([]byte, error) {
-// 	var msg error
-// 	newDevice := devicesstorage.DtoCreateDevice{}
-// 	Body, err := ioutil.ReadAll(jBody)
-// 	if err != nil {
-// 		return nil, errors.New("fail read json body at create new device")
-// 	}
-// 	err = json.Unmarshal(Body, &newDevice)
-// 	if err != nil {
-// 		return nil, errors.New("fail Unmarshal json at create new device")
-// 	}
-// 	// if missing field in json then error
-// 	if newDevice.Name == "" || newDevice.Type == "" {
-// 		return Body, errors.New("incorrect format json")
-// 	}
-// 	// if type new device is unknown then error
-// 	if newDevice.Type != "raw" && newDevice.Type != "lacp" && newDevice.Type != "vlan" {
-// 		return Body, errors.New("incorrect device type")
-// 	}
-// 	// if name new device exist in database then error
-// 	devExist := s.storage.CheckExistDevice(newDevice.Name)
-// 	if devExist {
-
-// 		return Body, errors.New("device " + newDevice.Name + " alredy exists")
-// 	}
-// 	// If  raw device is missing in database then error
-// 	// for _, dev := range newDevice.RawDevices {
-// 	// 	rawDevExist := s.storage.CheckExistDevice(dev)
-// 	// 	if !rawDevExist {
-// 	// 		return Body, errors.New("device named " + dev + " does not exists")
-// 	// 	}
-// 	// }
-// 	return Body, msg
-
-// }
 
 // Service for update device status
 func (s *service) UpdateDev(w http.ResponseWriter, r *http.Request) (*http.Response, error) {
@@ -168,7 +131,7 @@ func (s *service) UpdateDev(w http.ResponseWriter, r *http.Request) (*http.Respo
 		dev_name = vars["dev_name"]
 		err := s.UpdateDevByName(dev_name, r)
 		if err != nil {
-			log.Println(err)
+			config.Logging.Error(err.Error())
 			return nil, err
 
 		}
@@ -189,12 +152,12 @@ func (s *service) putGroupDevRequest(devItem map[string]interface{}) (*http.Resp
 	groupDev["devices"] = append(groupDev["devices"], devItem)
 	jsonString, _ := json.Marshal(groupDev)
 
-	config.Mysqllog.LogRest(string(jsonString), "/devices", "PUT")
+	config.Logging.LogRest(string(jsonString), "/devices", "PUT")
 
 	url := "http://" + config.Params.RPCHost + ":" + strconv.Itoa(config.Params.RPCPort) + "/devices"
 	request, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonString))
 	if err != nil {
-		config.Mysqllog.Error("put request to rpc server is fail")
+		config.Logging.Error("put request to rpc server is fail")
 		return nil, err
 	}
 	request.Header.Set("Content-Type", "application/json; charset=UTF-8")
@@ -217,7 +180,7 @@ func (s *service) putGroupDevRequest(devItem map[string]interface{}) (*http.Resp
 func (s *service) UpdateDevByName(dev_name string, r *http.Request) error {
 	respBody, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		config.Mysqllog.Error(err.Error())
+		config.Logging.Error(err.Error())
 		return err
 	}
 	devItem := make(map[string]interface{})
@@ -225,14 +188,9 @@ func (s *service) UpdateDevByName(dev_name string, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	// if _, ok := devItem["type"]; !ok {
-	// 	err_msg := errors.New("Wrong json format. Missing field type")
-	// 	config.Mysqllog.Error(err.Error())
-	// 	return err_msg
-	// }
 	if _, ok := devItem["name"]; !ok {
 		err_msg := errors.New(" wrong json format. Missing field name")
-		config.Mysqllog.Error(err_msg.Error())
+		config.Logging.Error(err_msg.Error())
 		return err_msg
 	}
 	s.putGroupDevRequest(devItem)
@@ -245,18 +203,18 @@ func (s *service) UpdateGroupDev(r *http.Request) (*http.Response, error) {
 	var resp *http.Response
 	respBody, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		config.Mysqllog.Error(err.Error())
+		config.Logging.Error(err.Error())
 		return nil, err
 	}
 	groupDev := make(map[string][]map[string]interface{})
 	err = json.Unmarshal(respBody, &groupDev)
 	if err != nil {
-		config.Mysqllog.Error(err.Error())
+		config.Logging.Error(err.Error())
 		return nil, err
 	}
 	if _, ok := groupDev["devices"]; !ok {
 		err_msg := errors.New(" wrong json format. Missing field type")
-		config.Mysqllog.Error(err_msg.Error())
+		config.Logging.Error(err_msg.Error())
 		return nil, err_msg
 	}
 	for _, dev := range groupDev["devices"] {
@@ -264,13 +222,13 @@ func (s *service) UpdateGroupDev(r *http.Request) (*http.Response, error) {
 		if dev_exists := s.storage.CheckExistDevice(devName); !dev_exists {
 			err_message := "Device with name " + devName + " not exists"
 
-			config.Mysqllog.Error(err_message)
+			config.Logging.Error(err_message)
 			return nil, errors.New(err_message)
 		}
 		if devSlave, ok := dev["slave"]; ok {
 			if slave_exists := s.storage.CheckExistDevice(devSlave.(string)); !slave_exists {
 				err_message := "Slave device with name " + devSlave.(string) + " not exists"
-				config.Mysqllog.Error(err_message)
+				config.Logging.Error(err_message)
 				return nil, errors.New(err_message)
 			}
 		}
@@ -278,7 +236,7 @@ func (s *service) UpdateGroupDev(r *http.Request) (*http.Response, error) {
 			if dst != nil {
 				if slave_exists := s.storage.CheckExistDevice(dst.(string)); !slave_exists {
 					err_message := "dst device with name " + dst.(string) + " not exists"
-					config.Mysqllog.Error(err_message)
+					config.Logging.Error(err_message)
 					return nil, errors.New(err_message)
 				}
 			}
@@ -300,6 +258,7 @@ func (s *service) sendDevState() {
 	devices := s.storage.GetAllDev()
 	// create devices
 	for _, dev := range devices {
+
 		if dev.Type == "vlan" {
 			virtDev := make(map[string]interface{})
 			virtDevs := make(map[string][]map[string]interface{})
@@ -312,7 +271,7 @@ func (s *service) sendDevState() {
 			s.postRequestToRPC(virtDevs)
 
 		}
-		config.Mysqllog.Info("Create device if not exists " + dev.Name)
+		config.Logging.Info("Create device if not exists " + dev.Name)
 	}
 	// update devices
 	for _, dev := range devices {
@@ -328,7 +287,7 @@ func (s *service) sendDevState() {
 			devItem["forwarding"] = dev.Forwarding
 		}
 		s.putGroupDevRequest(devItem)
-		config.Mysqllog.Info("Update device state " + dev.Name)
+		config.Logging.Info("Update device state " + dev.Name)
 	}
 
 }
@@ -336,13 +295,13 @@ func (s *service) sendDevState() {
 // Check exists device in database, if count device =0,
 // then fill database from get request in rpc server
 func (s *service) InitDevices() error {
-	config.Mysqllog.Info("Check device in database...")
+	config.Logging.Info("Check device in database...")
 	if s.storage.CheckExistDevice("") {
-		config.Mysqllog.Info("Devices already added to database")
+		config.Logging.Info("Devices already added to database")
 		s.sendDevState()
 		return nil
 	}
-	config.Mysqllog.Info("Adding devices to database")
+	config.Logging.Info("Adding devices to database")
 	url := "http://" + config.Params.RPCHost + ":" + strconv.Itoa(config.Params.RPCPort) + "/devices"
 	resp, err := http.Get(url)
 	if err != nil {
@@ -374,7 +333,7 @@ func (s *service) InitDevices() error {
 			if err != nil {
 				return err
 			}
-			tx.Commit()
+			tx.Commit(context.Background())
 		}
 	}
 	return nil
@@ -382,12 +341,12 @@ func (s *service) InitDevices() error {
 
 // get request for all device
 func (s *service) GetAll(r *http.Request) (*http.Response, error) {
-	config.Mysqllog.LogRest("{}", devicesURL, r.Method)
+	config.Logging.LogRest("{}", devicesURL, r.Method)
 	url := fmt.Sprintf("http://%s:%d%s", config.Params.RPCHost, config.Params.RPCPort, devicesURL)
 	resp, err := http.Get(url)
 	if err != nil {
 		msg := "error GET request for all devices"
-		config.Mysqllog.Error(msg)
+		config.Logging.Error(msg)
 		return nil, err
 	}
 	return resp, nil
@@ -403,11 +362,11 @@ func (s *service) GetOne(r *http.Request) (*http.Response, error) {
 		dev_name = vars["dev_name"]
 	}
 	url := fmt.Sprintf("http://%s:%d%s/%s", config.Params.RPCHost, config.Params.RPCPort, devicesURL, dev_name)
-	config.Mysqllog.LogRest("", devicesURL+"/"+dev_name, r.Method)
+	config.Logging.LogRest("", devicesURL+"/"+dev_name, r.Method)
 	resp, err := http.Get(url)
 	if err != nil {
 		msg := errors.New("rpc server response error")
-		config.Mysqllog.Error(msg.Error())
+		config.Logging.Error(msg.Error())
 		return nil, msg
 	}
 	return resp, nil
@@ -433,7 +392,7 @@ func (s *service) GetDeviceStat(r *http.Request) (*http.Response, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		msg := "rpc server response error"
-		config.Mysqllog.Error(errors.New(msg).Error())
+		config.Logging.Error(errors.New(msg).Error())
 		return nil, err
 	}
 	return resp, err
@@ -445,7 +404,7 @@ func (s *service) DeleteDev(w http.ResponseWriter, r *http.Request) (*http.Respo
 	vars := mux.Vars(r)
 	if _, ok := vars["dev_name"]; ok {
 		dev_name = vars["dev_name"]
-		config.Mysqllog.LogRest("", devicesURL+"/"+dev_name, r.Method)
+		config.Logging.LogRest("", devicesURL+"/"+dev_name, r.Method)
 		resp, err := s.deleteDevByName(dev_name, r)
 		if err != nil {
 			return nil, err
@@ -485,7 +444,7 @@ func (s *service) deleteGroupDev(r *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.Mysqllog.LogRest(string(body), devicesURL, r.Method)
+	config.Logging.LogRest(string(body), devicesURL, r.Method)
 	deveces := make(map[string][]map[string]interface{})
 	err = json.Unmarshal(body, &deveces)
 	if err != nil {

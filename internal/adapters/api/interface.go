@@ -1,6 +1,6 @@
 package api
 
-import mux "gitlab.ddos-guard.net/dma/gorilla"
+import mux "github.com/gorilla"
 
 type Handlers interface {
 	Register(router *mux.Router)

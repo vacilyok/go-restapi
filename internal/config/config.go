@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	Params   Configuration
-	Mysqllog logger.Logger
+	Params  Configuration
+	Logging logger.Logger
 )
 
 func init() {

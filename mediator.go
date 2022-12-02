@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"log"
 	"net/http"
 
 	devicehandlers "mediator/internal/adapters/api/devices"
@@ -12,11 +12,11 @@ import (
 	"mediator/internal/domain/devices"
 	"mediator/internal/domain/rules"
 	"mediator/internal/domain/watcher"
-	mysqldb "mediator/pkg/database/mysql"
+	"mediator/pkg/database/pg"
 	"mediator/pkg/logger"
 
-	mux "gitlab.ddos-guard.net/dma/gorilla"
-	handle "gitlab.ddos-guard.net/dma/gorilla-handlers"
+	mux "github.com/gorilla"
+	handle "github.com/gorilla-handlers"
 )
 
 func start(router *mux.Router) {
@@ -25,30 +25,28 @@ func start(router *mux.Router) {
 	headersOk := handle.AllowedHeaders([]string{"Content-Type"})
 	methodsOk := handle.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"})
 	originsOK := handle.AllowedOrigins([]string{"*"})
-	config.Mysqllog.Info("Start mediator service")
-	http.ListenAndServe(*addr, handle.CORS(originsOK, headersOk, methodsOk)(router))
-
+	config.Logging.Info("Start mediator service")
+	if err := http.ListenAndServe(*addr, handle.CORS(originsOK, headersOk, methodsOk)(router)); err != nil {
+		config.Logging.Error(err.Error())
+	}
 }
 
 func main() {
-	dbConn, err := mysqldb.DBconnect()
-	isConnection := false
+	config.Logging = logger.NewLogger()
+	isConnection := true
+	pgxConn, err := pg.DBInit()
 	if err != nil {
-		log.Println("ERROR: Not connect to database")
-	} else {
-		mysqldb.InitDB(dbConn)
-		isConnection = true
+		config.Logging.Error(err.Error())
+		isConnection = false
 	}
-	defer dbConn.Close()
-
-	config.Mysqllog = logger.NewLogger(dbConn, isConnection)
+	defer pgxConn.Close(context.Background())
 	router := mux.NewRouter()
-	devStoreage := devices.NewDevStorage(dbConn, isConnection)
-	devService := devices.NewService(devStoreage)
+	devStorage := devices.NewDevStorage(pgxConn)
+	devService := devices.NewService(devStorage)
 	devHandlers := devicehandlers.NewDevHandlers(devService)
 	devHandlers.Register(router)
 
-	ruleStorage := rules.NewRuleStorage(dbConn, isConnection)
+	ruleStorage := rules.NewRuleStorage(pgxConn)
 	ruleService := rules.NewService(ruleStorage)
 	ruleHandlers := ruleshandlers.NewRulesHandlers(ruleService)
 	ruleHandlers.Register(router)
@@ -59,7 +57,5 @@ func main() {
 		watch := watcher.NewWatcher(devService, ruleService)
 		watch.StartWatch()
 	}
-
 	start(router)
-
 }

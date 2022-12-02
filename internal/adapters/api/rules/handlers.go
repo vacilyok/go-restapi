@@ -7,7 +7,7 @@ import (
 	"mediator/internal/domain/rules"
 	"net/http"
 
-	mux "gitlab.ddos-guard.net/dma/gorilla"
+	mux "github.com/gorilla"
 )
 
 const (
@@ -30,7 +30,7 @@ func (rh *rulesHandler) viewResponse(writer http.ResponseWriter, resp *http.Resp
 	contentType := resp.Header.Get("Content-type")
 	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		config.Mysqllog.Error(err.Error())
+		config.Logging.Error(err.Error())
 		rh.errorResponse(writer, err, 500)
 		return
 	}

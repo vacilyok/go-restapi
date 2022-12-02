@@ -1,0 +1,1 @@
+INSERT INTO device_type (id,type_name) VALUES (1,'raw'),(2,'vlan'), (3,'lacp');
